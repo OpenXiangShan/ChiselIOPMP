@@ -192,7 +192,7 @@ object IOPMP extends App {
       // without this, firtool will exit with error: Unhandled annotation
       "--disable-annotation-unknown",
       "--lowering-options=explicitBitcast,disallowLocalVariables,disallowPortDeclSharing,locationInfoStyle=none",
-      "--split-verilog", "-o=gen_iopmp",
+      "--split-verilog", "-o=./build/rtl",
     )
   )
 }
