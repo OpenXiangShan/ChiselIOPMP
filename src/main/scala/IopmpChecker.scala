@@ -100,13 +100,14 @@ object IopmpParams {
   val regcfg_dataBits = 32
 
   // base addresses for various register tables
-  val reg_base_addr   = 0x0000_0000 // reg base address
-  val mdcfg_base_addr = 0x0000_0800 // mdcfgTable base address
-  val srcmd_base_addr = 0x0000_1000 // srcmdTable base address
-  val entry_base_addr = 0x0000_2000 // entryTable base address
+  val reg_base_addr   = 0x4010_0000 // reg base address
+  val info_base_addr  = reg_base_addr + 0x0000_0000 // info reg base address
+  val mdcfg_base_addr = reg_base_addr + 0x0000_0800 // mdcfgTable base address
+  val srcmd_base_addr = reg_base_addr + 0x0000_1000 // srcmdTable base address
+  val entry_base_addr = reg_base_addr + 0x0000_2000 // entryTable base address
 
   // max addresses for various register tables
-  val reg_max_addr   = reg_base_addr   + 0x0000_0080 // reg max address
+  val info_max_addr  = info_base_addr + 0x0000_0080 // reg max address
   val mdcfg_max_addr = mdcfg_base_addr + (mdcfg_m *  4) // mdcfgTable max address
   val srcmd_max_addr = srcmd_base_addr + (srcmd_s * 32) // srcmdTable max address
   val entry_max_addr = entry_base_addr + (entry_j * 16) // entryTable max address
@@ -232,7 +233,7 @@ class RegCfgMux extends Module {
   })
 
   // Check if address falls within valid range for each register table
-  val addrhit_info = (io.regcfg.addr >= IopmpParams.reg_base_addr.U) && (io.regcfg.addr < IopmpParams.reg_max_addr.U)
+  val addrhit_info = (io.regcfg.addr >= IopmpParams.info_base_addr.U) && (io.regcfg.addr < IopmpParams.info_max_addr.U)
   val addrhit_mdcfg = (io.regcfg.addr >= IopmpParams.mdcfg_base_addr.U) && (io.regcfg.addr < IopmpParams.mdcfg_max_addr.U)
   val addrhit_srcmd = (io.regcfg.addr >= IopmpParams.srcmd_base_addr.U) && (io.regcfg.addr < IopmpParams.srcmd_max_addr.U)
   val addrhit_entry = (io.regcfg.addr >= IopmpParams.entry_base_addr.U) && (io.regcfg.addr < IopmpParams.entry_max_addr.U)
