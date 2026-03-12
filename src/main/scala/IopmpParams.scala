@@ -21,14 +21,53 @@ import chisel3.experimental._
 import scala.annotation.varargs
 import javax.xml.transform.OutputKeys
 
+/* 
+In full mode:
+  srcmd_fmt = 0, mdcfg_fmt = 0
+
+  srcmd table num(rrid_num) <= 32
+  mdcfg table num(md_num  ) <= 31
+  entry table num(entry_num) has no limit
+
+In rapid-k mode:
+  srcmd_fmt = 0, mdcfg_fmt = 1
+
+  srcmd table num(rrid_num) <= 32
+  entry table num(entry_num) = k * (md_num), and k = md_entry_num + 1
+
+In compact-k mode:
+  srcmd_fmt = 1, mdcfg_fmt = 1
+
+  srcmd table num(rrid_num) <= 32
+  entry table num(entry_num) = k * (md_num = rrid_num), and k = md_entry_num + 1
+
+ */
+
+object IopmpMode extends Enumeration {
+  type IopmpMode = Value
+  val Full = Value(0, "Full")
+  val RapidK = Value(1, "RapidK")
+  val CompactK = Value(2, "CompactK")
+  // 获取模式对应的 srcmd_fmt 和 mdcfg_fmt 值
+  def getConfig(mode: IopmpMode): (Int, Int) = mode match {
+    case Full      => (0, 0)
+    case RapidK    => (0, 1)
+    case CompactK  => (1, 1)
+  }
+}
 
 object IopmpParams {
+  // mode select
+  val mode = IopmpMode.RapidK
+
   // global settings for the IOPMP checker
   val vendor             = 0    // [R   ]
   val specver            = 8    // [R   ]
   val impid              = 1    // [R   ]
-  val mdcfg_fmt          = 0    // [R   ] mdcfgTable format
-  val srcmd_fmt          = 0    // [R   ] srcmdTable format
+  val mdcfg_fmt          = if (mode == IopmpMode.Full) 0 else 1
+                                // [R   ] mdcfgTable format
+  val srcmd_fmt          = if (mode == IopmpMode.CompactK) 1 else 0
+                                // [R   ] srcmdTable format
   val tor_en             = 0    // [R   ] TOR enabled
   val sps_en             = 0    // [R   ] secondary permission settings disabled
   val user_cfg_en        = 0    // [R   ] user customized attributes disabled
@@ -42,12 +81,12 @@ object IopmpParams {
   val peis               = 1    // [R   ] PEIS enabled
   val pees               = 0    // [R   ] PEES enabled
   val mfr_en             = 0    // [R   ] MFR disabled
-  val md_entry_num       = 0    // [WARL] MD entry number, 0 for mdcfg_fmt 0 
-  val md_num             = 31   // [R   ] mdcfgTable number m，max=64
+  val md_entry_num_base  = 7    // [WARL] MD entry number, 0 for mdcfg_fmt 0 
+  val md_num_base        = 31   // [R   ] mdcfgTable number m，max=64
   val addrh_en           = 1    // [R   ] enable addrh
   val enable             = 0    // [W1SS] disable iopmpchecker default
   val rrid_num           = 32   // [R   ] Indicate the number of RRIDs
-  val entry_num          = 512  // [R   ] Indicate the number of entries
+  val entry_num_base     = 512  // [R   ] Indicate the number of entries // in k mode, entry_num = k * md_num
   val prio_entry         = 0    // [WARL] Indicate the number of entries matched with priority
   val rrid_transl        = 0    // [WARL] The RRID tagged to outgoing transactions
   val msi_en             = 0    // [WARL] Indicates whether the IOPMP triggers interrupt by MSI or wired interrupt
@@ -57,12 +96,16 @@ object IopmpParams {
 
   // srcmdTable parameters
 	val srcmd_s = rrid_num // srcmdTable number s，max=65536
-  val srcmd_addr_width = 16 // srcmdTable address width
+  val srcmd_addr_width = log2Ceil(srcmd_s) // srcmdTable address width
   // mdcfgTable parameters
+  val md_num = if (srcmd_fmt == 1) rrid_num else md_num_base // srcmd fmt = 1, md_num = rrid_num
 	val mdcfg_m = md_num // mdcfgTable number m，max=64
   val mdcfg_addr_width = log2Ceil(mdcfg_m) // mdcfgTable address width
+  val md_entry_num  = if (mdcfg_fmt == 0) 0 else md_entry_num_base  //in k mode, k = md_entry_num + 1
+  val k = md_entry_num + 1
 
   // entryTable parameters
+  val entry_num = if (mdcfg_fmt == 0) entry_num_base else k * md_num
 	val entry_j = entry_num // entryTable number j，max= +oo
   val entry_addr_width = log2Ceil(entry_j) // entryTable address width
 
