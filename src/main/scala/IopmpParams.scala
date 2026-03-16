@@ -43,22 +43,16 @@ In compact-k mode:
 
  */
 
-object IopmpMode extends Enumeration {
-  type IopmpMode = Value
-  val Full = Value(0, "Full")
-  val RapidK = Value(1, "RapidK")
-  val CompactK = Value(2, "CompactK")
-  // 获取模式对应的 srcmd_fmt 和 mdcfg_fmt 值
-  def getConfig(mode: IopmpMode): (Int, Int) = mode match {
-    case Full      => (0, 0)
-    case RapidK    => (0, 1)
-    case CompactK  => (1, 1)
-  }
+sealed trait IopmpMode
+object IopmpMode {
+  case object Full     extends IopmpMode
+  case object RapidK   extends IopmpMode
+  case object CompactK extends IopmpMode
 }
 
 object IopmpParams {
   // mode select
-  val mode = IopmpMode.RapidK
+  val mode: IopmpMode = IopmpMode.RapidK
 
   // global settings for the IOPMP checker
   val vendor             = 0    // [R   ]

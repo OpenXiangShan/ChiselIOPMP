@@ -367,7 +367,7 @@ class CtrlRapidK extends Module {
   io.req.ready := (state === State.sIdle) && !io.stall
 
   // read srcmd
-  io.srcmd.s_indx := io.req.bits
+  io.srcmd.s_indx := io.req.bits.rrid
   io.srcmd.s_en := io.req.fire
   // every cycle get a new md
   when(io.req.fire){
@@ -456,18 +456,7 @@ class CtrlRapidK extends Module {
   io.enable := io.reg.o_reg_hwcfg0_enable.asBool
 }
 
-class IopmpCheckerRapidK extends Module {
-  val io = IO(new Bundle {
-    val regcfg = RegCfgIO()
-    // check req
-    val req = Flipped(new ReqIO)
-    // check rsp
-    val resp = new RspIO
-    val int = Output(Bool()) // interrupt
-    val flush = Output(Bool()) // flush (if have a fast table out of checker, need flush)
-    val rs = Output(Bool()) // response suppression
-    val enable = Output(Bool()) // IOPMP enable
-  })
+class IopmpCheckerRapidK extends Module with IopmpCheckerBase{
 
   // Declare modules
   val regcfg_mux = Module(new RegCfgMuxRapidK)

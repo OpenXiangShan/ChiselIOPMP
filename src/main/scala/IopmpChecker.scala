@@ -1224,8 +1224,7 @@ class Ctrl extends Module {
 /* 
   main module for IOPMP checker
 */
-class IopmpChecker extends Module {
-  val io = IO(new Bundle {
+class IopmpCheckerIO extends Bundle {
     val regcfg = RegCfgIO()
     // check req
     val req = Flipped(new ReqIO)
@@ -1235,7 +1234,13 @@ class IopmpChecker extends Module {
     val flush = Output(Bool()) // flush (if have a fast table out of checker, need flush)
     val rs = Output(Bool()) // response suppression
     val enable = Output(Bool()) // IOPMP enable
-  })
+}
+
+trait IopmpCheckerBase extends Module {
+  val io = IO(new IopmpCheckerIO())
+}
+
+class IopmpChecker extends Module with IopmpCheckerBase{
 
   // Declare modules
   val regcfg_mux = Module(new RegCfgMux)

@@ -85,7 +85,7 @@ class IopmpLazy(numBridge: Int = 1)(implicit p: Parameters) extends LazyModule {
     bridges(i).slaveNode := slaveNodes(i)    // identityNode(source) -> bridge.slaveNode(sink)
     masterNodes(i) := bridges(i).masterNode  // bridge.masterNode(source) -> identityNode(sink)
   }
-      
+
   lazy val module = new Imp
   class Imp extends LazyModuleImp(this) {
     val apb_s = IO(new APBSlaveBundle(IopmpParams.regcfg_addrBits, IopmpParams.regcfg_dataBits))
@@ -93,7 +93,11 @@ class IopmpLazy(numBridge: Int = 1)(implicit p: Parameters) extends LazyModule {
 
     // APB2Reg and Checker
     val apb2reg = Module(new APB2Reg())
-    val iopmp_checker = Module(new IopmpChecker())
+    val iopmp_checker: IopmpCheckerBase = if (IopmpParams.mode == IopmpMode.Full) {
+      Module(new IopmpChecker())
+    } else {
+      Module(new IopmpCheckerRapidK())
+    }
 
     if (numBridge > 1) {
       val reqArb = Module(new ReqArb(numBridge))
