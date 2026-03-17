@@ -374,6 +374,8 @@ class CtrlRapidK extends Module {
     md := io.srcmd.m_indx
   }.elsewhen(md_hasTask){
     md := md & (~md_taskMask).asUInt // clear the md has been checked
+  }.elsewhen(state === State.sDone){
+    md := 0.U
   }.otherwise{
     md := 0.U
   }
