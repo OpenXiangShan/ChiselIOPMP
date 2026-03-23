@@ -95,8 +95,10 @@ class IopmpLazy(numBridge: Int = 1)(implicit p: Parameters) extends LazyModule {
     val apb2reg = Module(new APB2Reg())
     val iopmp_checker: IopmpCheckerBase = if (IopmpParams.mode == IopmpMode.Full) {
       Module(new IopmpChecker())
-    } else {
+    } else if (IopmpParams.mode == IopmpMode.RapidK) {
       Module(new IopmpCheckerRapidK())
+    } else {
+      Module(new IopmpCheckerCompactK())
     }
 
     if (numBridge > 1) {
