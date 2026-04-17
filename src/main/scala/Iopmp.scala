@@ -22,6 +22,7 @@ import freechips.rocketchip.diplomacy._
 import freechips.rocketchip.amba.axi4._
 import freechips.rocketchip.util._
 import _root_.circt.stage.ChiselStage
+import utility.{LogUtilsOptionsKey, LogUtilsOptions}  
 
 // Arbiter
 class ReqArb(n: Int) extends Module {
@@ -184,9 +185,16 @@ class IopmpLazyWrapper(numBridge: Int = 1)(implicit p: Parameters) extends LazyM
  * Generate Verilog sources
  */
 object IOPMP extends App {
-  implicit val p: Parameters = Parameters.empty
-  val top = LazyModule(new IopmpLazyWrapper(numBridge = 1)) // only one bridge test pass
-
+  // implicit val p: Parameters = Parameters.empty
+  implicit val p: Parameters = Parameters.empty.alterPartial {                             
+    case LogUtilsOptionsKey => LogUtilsOptions(                                            
+      enableDebug = false,                                                                 
+      enablePerf = false,                                                                  
+      fpgaPlatform = false                                                                 
+    )                                                                                      
+  }   
+  // val top = LazyModule(new IopmpLazyWrapper(numBridge = 1)) // only one bridge test pass
+  val top = LazyModule(new Demo)
 
   ChiselStage.emitSystemVerilog(
     top.module,
