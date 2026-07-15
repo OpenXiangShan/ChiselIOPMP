@@ -6,17 +6,16 @@ import $file.`rocket-chip`.common
 import $file.`rocket-chip`.cde.common
 import $file.`rocket-chip`.hardfloat.common
 
-val defaultScalaVersion = "2.13.15"
+val defaultScalaVersion = "2.13.17"
 val pwd = os.Path(sys.env("MILL_WORKSPACE_ROOT"))
 
 def defaultVersions = Map(
-  "chisel"        -> ivy"org.chipsalliance::chisel:6.7.0",
-  "chisel-plugin" -> ivy"org.chipsalliance:::chisel-plugin:6.7.0",
-  "chiseltest"    -> ivy"edu.berkeley.cs::chiseltest:6.0.0"
+  "chisel"        -> mvn"org.chipsalliance::chisel:7.13.0",
+  "chisel-plugin" -> mvn"org.chipsalliance:::chisel-plugin:7.13.0",
 )
 /* resolve firtool dependency */
-import $ivy.`org.chipsalliance::chisel:6.7.0`
-import $ivy.`org.chipsalliance::firtool-resolver:1.3.0`
+import $ivy.`org.chipsalliance::chisel:7.13.0`
+import $ivy.`org.chipsalliance::firtool-resolver:2.1.1`
 
 trait HasChisel extends SbtModule {
   def chiselModule: Option[ScalaModule] = None
@@ -57,9 +56,9 @@ object rocketchip
 
   def cdeModule = cde
 
-  def mainargsIvy = ivy"com.lihaoyi::mainargs:0.7.0"
+  def mainargsIvy = mvn"com.lihaoyi::mainargs:0.7.0"
 
-  def json4sJacksonIvy = ivy"org.json4s::json4s-jackson:4.0.7"
+  def json4sJacksonIvy = mvn"org.json4s::json4s-jackson:4.0.7"
 
   object macros extends Macros
 
@@ -69,7 +68,7 @@ object rocketchip
 
     def scalaVersion: T[String] = T(defaultScalaVersion)
 
-    def scalaReflectIvy = ivy"org.scala-lang:scala-reflect:${defaultScalaVersion}"
+    def scalaReflectIvy = mvn"org.scala-lang:scala-reflect:${defaultScalaVersion}"
   }
 
   object hardfloat
@@ -99,11 +98,11 @@ object utility extends HasChisel {
   )
 
   override def ivyDeps = super.ivyDeps() ++ Agg(
-    ivy"com.lihaoyi::sourcecode:0.4.2",
+    mvn"com.lihaoyi::sourcecode:0.4.2",
   )
 
   object test extends SbtTests with TestModule.ScalaTest {
-    override def ivyDeps = Agg(ivy"org.scalatest::scalatest:3.2.7")
+    override def ivyDeps = Agg(mvn"org.scalatest::scalatest:3.2.20")
   }
 }
 
@@ -130,9 +129,8 @@ object ChiselIOPMP extends ChiselIOPMPModule with HasChisel with ScalafmtModule 
   def utilityModule: ScalaModule = utility
 
   override def ivyDeps = super.ivyDeps() ++ Agg(
-    defaultVersions("chiseltest"),
-    ivy"io.circe::circe-yaml:1.15.0",
-    ivy"io.circe::circe-generic-extras:0.14.4"
+    mvn"io.circe::circe-yaml:1.15.0",
+    mvn"io.circe::circe-generic-extras:0.14.4"
   )
 
   override def scalacOptions = super.scalacOptions() ++ Agg("-deprecation", "-feature")
