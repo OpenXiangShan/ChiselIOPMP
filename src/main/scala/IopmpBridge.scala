@@ -31,6 +31,7 @@ class APBSlaveBundle(addrBits: Int, dataBits: Int) extends Bundle {
   val pwdata  = Input(UInt(dataBits.W))
   val pready  = Output(Bool())
   val prdata  = Output(UInt(dataBits.W))
+  val pslverr = Output(Bool())
 }
 
 // APB2Reg translator
@@ -46,6 +47,11 @@ io.reg.addr := io.apb.paddr
 io.reg.din := io.apb.pwdata
 io.apb.pready := (io.apb.psel && io.apb.penable) //access
 io.apb.prdata := io.reg.dout
+// APB reports a semantic register error in the access phase.  The setup
+// phase still reaches the register block so that the address/data remain
+// available for the following access phase, but the MDCFG SRAM write is
+// suppressed when RegCfgIO.err is asserted.
+io.apb.pslverr := (io.apb.psel && io.apb.penable) && io.reg.err
 }
 
 class IopmpBridgeLazy(
