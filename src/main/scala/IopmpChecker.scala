@@ -42,7 +42,7 @@ object IopmpParams {
   val peis               = 1    // [R   ] PEIS enabled
   val pees               = 0    // [R   ] PEES enabled
   val mfr_en             = 0    // [R   ] MFR disabled
-  val md_entry_num       = 0    // [WARL] MD entry number, 0 for mdcfg_fmt 0 
+  val md_entry_num       = 0    // [WARL] MD entry number, 0 for mdcfg_fmt 0
   val md_num             = 31   // [R   ] mdcfgTable number m，max=64
   val addrh_en           = 1    // [R   ] enable addrh
   val enable             = 0    // [W1SS] disable iopmpchecker default
@@ -50,10 +50,10 @@ object IopmpParams {
   val entry_num          = 512  // [R   ] Indicate the number of entries
   val prio_entry         = 0    // [WARL] Indicate the number of entries matched with priority
   val rrid_transl        = 0    // [WARL] The RRID tagged to outgoing transactions
-  val msi_en             = 0    // [WARL] Indicates whether the IOPMP triggers interrupt by MSI or wired interrupt
+  // [R] HWCFG2.msi_en: this implementation exposes only a wired interrupt
+  // and has no MSI write path, so the MSI extension must be reported absent.
+  val msi_en             = 0
   val stall_violation_en = 0    // [WARL] Indicates whether the IOPMP faults stalled transactions
-  val msidata            = 0    // [WARL] The data to trigger MSI
-  val msi_werr           = 0    // [R/W1C] It’s asserted when the write access to trigger an IOPMP-originated MSI has failed
 
   // srcmdTable parameters
 	val srcmd_s = rrid_num // srcmdTable number s，max=65536
@@ -94,7 +94,7 @@ object IopmpParams {
   val reg_errmsiaddr_addr_offset      = 0x0078.U(16.W) // errmsiaddr
   val reg_errmsiaddrh_addr_offset     = 0x007C.U(16.W) // errmsiaddrh
   val reg_erruser_addr_offset         = 0x0080.U(16.W) // erruser
- 
+
   // register configuration interface parameters
   val regcfg_addrBits = 32
   val regcfg_dataBits = 32
@@ -220,6 +220,9 @@ class RegCfgIO(addrWidth: Int, dataWidth: Int) extends Bundle {
   val addr = Input(UInt(addrWidth.W))
   val din  = Input(UInt(dataWidth.W))
   val dout = Output(UInt(dataWidth.W))
+  // Register access error.  This is consumed by the APB adapter and is
+  // asserted for a completed, but semantically invalid, write.
+  val err  = Output(Bool())
 }
 
 // Register Configuration Interface Mux
@@ -252,8 +255,11 @@ class RegCfgMux extends Module {
     regcfg.v    := Mux(hit, io.regcfg.v, false.B)
   }
 
-  io.regcfg.dout := MuxCase(0.U, 
+  io.regcfg.dout := MuxCase(0.U,
     regcfgs.map { case (regcfg, hit) => hit -> regcfg.dout }
+  )
+  io.regcfg.err := MuxCase(false.B,
+    regcfgs.map { case (regcfg, hit) => hit -> regcfg.err }
   )
 }
 
@@ -268,6 +274,9 @@ class SrcmdTable extends Module {
     val regcfg = RegCfgIO()
     val bits = new SrcmdTableIO()
   })
+
+  // SRCMD accesses currently have no additional semantic error condition.
+  io.regcfg.err := false.B
 
   // srcmd_en(s).md
   val srcmd_en = Module(new TrueDualPortSRAM(addrWidth = log2Ceil(IopmpParams.srcmd_s), dataWidth = 31, readLatency = 1, depth = IopmpParams.srcmd_s))
@@ -294,7 +303,7 @@ class SrcmdTable extends Module {
 	when(srcmd_en_v && io.regcfg.rw && !lck(srcmd_en_addr)){ srcmd_en.io.a_wdata := io.regcfg.din(31, 1) }.otherwise { srcmd_en.io.a_wdata := 0.U }
 	srcmd_en.io.a_addr := srcmd_en_addr
   when(srcmd_en_v_delayed){ io.regcfg.dout := Cat(srcmd_en.io.a_rdata, lck_delayed) }.otherwise { io.regcfg.dout := 0.U }
-	
+
 	// srcmdTable port B read with s indx
 	when(io.bits.s_en) { srcmd_en.io.b_en := true.B }.otherwise { srcmd_en.io.b_en := false.B }
 	srcmd_en.io.b_addr := io.bits.s_indx
@@ -313,7 +322,17 @@ class MdcfgTable extends Module {
 	val io = IO(new Bundle {
 		val regcfg = RegCfgIO()
     val bits = new MdcfgTableIO()
-	})
+  })
+
+  // MDCFG.t is an entry index boundary.  Since ENTRY indices are
+  // 0..entry_num-1, the exclusive top boundary may be entry_num itself
+  // (512 in this implementation), but no larger value is representable by
+  // the ENTRY table.  Report larger writes as an APB error and do not commit
+  // them to the SRAM.
+  val mdcfg_boundary = io.regcfg.din(15, 0)
+  val invalid_boundary = io.regcfg.rw &&
+    (mdcfg_boundary > IopmpParams.entry_num.U(16.W))
+  io.regcfg.err := invalid_boundary
 
   // mdcfg(m)
   val mdcfg = Module(new TrueDualPortSRAM(addrWidth = IopmpParams.mdcfg_addr_width, dataWidth = 16, readLatency = 1, depth = IopmpParams.mdcfg_m))
@@ -326,8 +345,8 @@ class MdcfgTable extends Module {
 
   // mdcfgTable port A reg cfg r/w
   when(io.regcfg.v){ mdcfg.io.a_en := true.B }.otherwise { mdcfg.io.a_en := false.B }
-  when(io.regcfg.v && io.regcfg.rw){ mdcfg.io.a_we := true.B }.otherwise { mdcfg.io.a_we := false.B }
-  when(io.regcfg.v && io.regcfg.rw){ mdcfg.io.a_wdata := io.regcfg.din(15, 0) }.otherwise { mdcfg.io.a_wdata := 0.U }
+  when(io.regcfg.v && io.regcfg.rw && !invalid_boundary){ mdcfg.io.a_we := true.B }.otherwise { mdcfg.io.a_we := false.B }
+  when(io.regcfg.v && io.regcfg.rw && !invalid_boundary){ mdcfg.io.a_wdata := io.regcfg.din(15, 0) }.otherwise { mdcfg.io.a_wdata := 0.U }
   mdcfg.io.a_addr := mdcfg_addr
   when(regcfg_v_delayed){ io.regcfg.dout := Cat(0.U(16.W), mdcfg.io.a_rdata) }.otherwise { io.regcfg.dout := 0.U }
 
@@ -371,15 +390,23 @@ class EntryTable extends Module {
   val entry_addrh  = Module(new TrueDualPortSRAM(addrWidth = IopmpParams.entry_addr_width, dataWidth = 32, readLatency = 1, depth = IopmpParams.entry_j))
   val entry_cfg  = Module(new TrueDualPortSRAM(addrWidth = IopmpParams.entry_addr_width, dataWidth = 11, readLatency = 1, depth = IopmpParams.entry_j))
   val entrySeq = Seq(entry_addr, entry_addrh, entry_cfg)
-  
+
   // regcfg port addr translate, Address interval 16
   val entryTable_addr = ((io.regcfg.addr(15,0)) >> 4.U)(IopmpParams.entry_addr_width-1,0)
 
   // subtable port addr hit
-  val entry_hit_addr = io.regcfg.addr(3, 2) === 0.U(2.W) 
-  val entry_hit_addrh = io.regcfg.addr(3, 2) === 1.U(2.W) 
-  val entry_hit_cfg = io.regcfg.addr(3, 2) === 2.U(2.W) 
+  val entry_hit_addr = io.regcfg.addr(3, 2) === 0.U(2.W)
+  val entry_hit_addrh = io.regcfg.addr(3, 2) === 1.U(2.W)
+  val entry_hit_cfg = io.regcfg.addr(3, 2) === 2.U(2.W)
   val entry_hit_Seq = Seq(entry_hit_addr, entry_hit_addrh, entry_hit_cfg)
+
+  // ENTRY_ADDRH stores address bits [65:34].  With a 48-bit byte address,
+  // only bits [47:34] (ENTRY_ADDRH[13:0]) are implemented; bits [65:48]
+  // (ENTRY_ADDRH[31:14]) must not be silently truncated by the checker.
+  // Report the invalid write on APB and leave the SRAM contents unchanged.
+  val invalid_addrh = io.regcfg.rw && entry_hit_addrh &&
+    io.regcfg.din(31, IopmpParams.soc_addr_width - 34).orR
+  io.regcfg.err := invalid_addrh
 
   // entry valid
   val entry_v_seq = entry_hit_Seq.map(_ && io.regcfg.v)
@@ -388,11 +415,11 @@ class EntryTable extends Module {
   // entry Table port A reg cfg r/w
   entrySeq.zip(entry_v_seq).zipWithIndex.foreach { case ((sram, v), idx) =>
     sram.io.a_en := v
-    sram.io.a_we := v && io.regcfg.rw
+    sram.io.a_we := v && io.regcfg.rw && !invalid_addrh
     sram.io.a_addr := entryTable_addr
     sram.io.a_wdata := (idx match {
-      case 2 => Mux(v && io.regcfg.rw, io.regcfg.din(10, 0), 0.U(11.W))
-      case _ => Mux(v && io.regcfg.rw, io.regcfg.din, 0.U(32.W))
+      case 2 => Mux(v && io.regcfg.rw && !invalid_addrh, io.regcfg.din(10, 0), 0.U(11.W))
+      case _ => Mux(v && io.regcfg.rw && !invalid_addrh, io.regcfg.din, 0.U(32.W))
     })
   }
 
@@ -494,7 +521,7 @@ object RegHwcfg0 {
 }
 class RegHwcfg0 extends Bundle {
   val enable            = UInt(1.W)  // [W1SS] Indicate if the IOPMP checks transactions by default
-  val addrh_en          = UInt(1.W)  // [R   ] Indicate if ENTRY_ADDRH(i) and ERR_MSIADDRH (if ERR_CFG.msi_en = 1) are available
+  val addrh_en          = UInt(1.W)  // [R   ] Indicate if ENTRY_ADDRH(i) and ERR_MSIADDRH (if HWCFG2.msi_en = 1) are available
   val md_num            = UInt(6.W)  // [R   ] Indicate the supported number of MD in the instance
   val md_entry_num      = UInt(7.W)  // [WARL] When HWCFG0.mdcfg_fmt = 0x0: must be zero
   val mfr_en            = UInt(1.W)  // [R   ] Indicate if the IOPMP implements Multi Faults Record Extension
@@ -511,7 +538,7 @@ class RegHwcfg0 extends Bundle {
   val sps_en            = UInt(1.W)  // [R   ] Indicate secondary permission settings is supported
   val tor_en            = UInt(1.W)  // [R   ] Indicate if TOR is supported
   val srcmd_fmt         = UInt(2.W)  // [R   ] Indicate the SRCMD format
-  val mdcfg_fmt         = UInt(2.W)  // [R   ] Indicate the MDCFG format 
+  val mdcfg_fmt         = UInt(2.W)  // [R   ] Indicate the MDCFG format
   //to 32 bits
   def toUInt: UInt = Cat(enable, addrh_en, md_num, md_entry_num, mfr_en, pees, peis, stall_en, no_w, no_x, chk_x, rrid_transl_prog, rrid_transl_en, prient_prog, user_cfg_en, sps_en, tor_en, srcmd_fmt, mdcfg_fmt)
 }
@@ -544,8 +571,15 @@ object RegHwcfg2 {
 class RegHwcfg2 extends Bundle {
   val rrid_transl       = UInt(16.W) // [WARL] The RRID tagged to outgoing transactions
   val prio_entry        = UInt(16.W) // [WARL] Indicate the number of entries matched with priority
-  //to 32 bits
-  def toUInt: UInt = Cat(rrid_transl, prio_entry)
+  // Keep the existing legacy layout, but explicitly report the new-spec
+  // HWCFG2.msi_en capability bit (bit 26) as zero. rrid_transl is currently
+  // unsupported and remains zero as well.
+  def toUInt: UInt = Cat(
+    rrid_transl(15, 11),
+    IopmpParams.msi_en.U(1.W),
+    rrid_transl(9, 0),
+    prio_entry
+  )
 }
 
 // entryoffset register
@@ -571,7 +605,7 @@ class RegHwcfguser extends Bundle {
 class RegMdstall extends Bundle {
   val is_stalled        = UInt(1.W)  // [R   ] 1 indicates that all requested stalls take effect; otherwise, 0
   val md                = UInt(31.W) // [WARL] Writing md[m]=1 selects MD m; reading md[m] = 1 means MD m selected
-  val exempt            = UInt(1.W)  // [W   ] Stall transactions with exempt selected MDs, or Stall selected MDs  
+  val exempt            = UInt(1.W)  // [W   ] Stall transactions with exempt selected MDs, or Stall selected MDs
 }
 
 class RegMdstallh extends Bundle {
@@ -585,7 +619,7 @@ class RegRridscp extends Bundle {
   val rrid              = UInt(16.W) // [WARL] RRID to select
 }
 
-class RegRridscp extends Bundle {  
+class RegRridscp extends Bundle {
   val stat              = UInt(2.W)  // [R   ] --
   val op                = UInt(2.W)  // [W   ] --
   val rsv               = UInt(14.W) // [ZERO] Must be zero on write, reserved for future
@@ -611,7 +645,7 @@ class RegMdcfglck extends Bundle {
 class RegEntrylck extends Bundle {
   val rsv               = UInt(15.W) // [ZERO] Must be zero on write, reserved for future
   val f                 = UInt(16.W) // [WARL] Indicate the number of locked ENTRY entries - ENTRY(j) is locked for j < f
-  val l                 = UInt(1.W)  // [W1SS] Lock bit to ENTRYLCK register 
+  val l                 = UInt(1.W)  // [W1SS] Lock bit to ENTRYLCK register
 }
 not implemented end */
 
@@ -622,25 +656,25 @@ object RegErrcfg {
     init_val.l                  := 0.U
     init_val.ie                 := 0.U
     init_val.rs                 := 0.U
-    init_val.msi_en             := IopmpParams.msi_en.U // 1.U
+    init_val.msi_sel            := 0.U
     init_val.stall_violation_en := IopmpParams.stall_violation_en.U // 1.U
     init_val.rsv1               := 0.U
-    init_val.msidata            := IopmpParams.msidata.U // 0x000.U
+    init_val.msidata            := 0.U
     init_val.rsv2               := 0.U
     RegInit(init_val)
   }
 }
 class RegErrcfg extends Bundle {
   val rsv2              = UInt(13.W) // [ZERO] Must be zero on write, reserved for future
-  val msidata           = UInt(11.W) // [WARL] The data to trigger MSI
+  val msidata           = UInt(11.W) // [WARL] MSI data; hardwired to zero when MSI is unsupported
   val rsv1              = UInt(3.W)  // [ZERO] Must be zero on write, reserved for future
   val stall_violation_en= UInt(1.W)  // [WARL] Indicates whether the IOPMP faults stalled transactions
-  val msi_en            = UInt(1.W)  // [WARL] Indicates whether the IOPMP triggers interrupt by MSI or wired interrupt
+  val msi_sel           = UInt(1.W)  // [WARL] Select MSI (1) or wired interrupt (0); hardwired to zero
   val rs                = UInt(1.W)  // [WARL] To suppress an error response on an IOPMP rule violation
   val ie                = UInt(1.W)  // [RW  ] Enable the interrupt of the IOPMP rule violation
   val l                 = UInt(1.W)  // [W1SS] Lock fields to ERR_CFG register
   //to 32 bits
-  def toUInt: UInt = Cat(rsv2, msidata, rsv1, stall_violation_en, msi_en, rs, ie, l)
+  def toUInt: UInt = Cat(rsv2, msidata, rsv1, stall_violation_en, msi_sel, rs, ie, l)
 }
 
 // error info register
@@ -649,7 +683,8 @@ object RegErrinfo {
     val init_val = Wire(new RegErrinfo)
     init_val.v        := 0.U
     init_val.ttype    := 0.U
-    init_val.msi_werr := IopmpParams.msi_werr.U // 0.U
+    // No MSI request can be issued, so an MSI write error cannot occur.
+    init_val.msi_werr := 0.U
     init_val.etype    := 0.U
     init_val.svc      := 0.U
     init_val.rsv      := 0.U
@@ -660,7 +695,7 @@ class RegErrinfo extends Bundle {
   val rsv               = UInt(23.W) // [ZERO] Must be zero on write, reserved for future
   val svc               = UInt(1.W)  // [R   ] Indicate there is a subsequent violation caught in ERR_MFR
   val etype             = UInt(4.W)  // [R   ] Indicated the type of violation
-  val msi_werr          = UInt(1.W)  // [R/W1C] It’s asserted when the write access to trigger an IOPMP-originated MSI has failed.
+  val msi_werr          = UInt(1.W)  // [R/W1C/ZERO] Hardwired to zero because MSI is unavailable.
   val ttype             = UInt(2.W)  // [R   ]  Indicated the transaction type of the first captured violation
   val v                 = UInt(1.W)  // [R/W1C] Indicate if the illegal capture recorder valid
   //to 32 bits
@@ -679,7 +714,7 @@ object RegErreqaddr {
 class RegErreqaddr extends Bundle {
   val addr              = UInt(32.W) // [R   ] Indicate the errored address[33:2]
   // to 32 bits
-  def toUInt: UInt = Cat(addr) 
+  def toUInt: UInt = Cat(addr)
 }
 
 // error req addrh register
@@ -739,6 +774,7 @@ class RegMapIO extends Bundle {
   val i_errinfo_v = Input(UInt(1.W)) // caputure a illegal action
   val i_errinfo_ttype = Input(UInt(2.W)) // transaction type of the first captured violation
   val i_errinfo_etype = Input(UInt(4.W)) // type of violation
+  val i_errinfo_irq_suppressed = Input(Bool()) // interrupt suppression of the first captured violation
   val i_erreqaddr = Input(UInt(32.W)) // Indicate the errored address[33:2]
   val i_erreqaddrh = Input(UInt(32.W)) // Indicate the errored address[65:34]
   val i_erreqid_rrid = Input(UInt(16.W)) // Indicate the errored RRID
@@ -750,10 +786,9 @@ class RegMapIO extends Bundle {
   val o_reg_hwcfg2_prio_entry = Output(UInt(16.W)) // IOPMP priority entry number
   val o_reg_errcfg_ie = Output(UInt(1.W)) // interrupt enable
   val o_reg_errcfg_rs = Output(UInt(1.W)) // bus response suppression
-  val o_reg_errcfg_msi_en = Output(UInt(1.W)) // MSI enable
-  val o_reg_errcfg_msidata = Output(UInt(11.W)) // MSI data
   val o_reg_errinfo_v = Output(UInt(1.W)) // Indicate captured a illegal action, wire to int
   val o_reg_errinfo_ttype = Output(UInt(2.W)) // error info
+  val o_reg_errinfo_irq_suppressed = Output(Bool()) // sticky suppression state for the captured violation
 }
 
 class RegMap extends Module {
@@ -761,6 +796,10 @@ class RegMap extends Module {
     val regcfg = RegCfgIO()
     val bits = new RegMapIO()
   })
+
+  // Register-map writes are validated by the individual field semantics;
+  // none currently reports an APB access error.
+  io.regcfg.err := false.B
 
   // Declare registers
   val reg_version        = RegVersion()
@@ -771,12 +810,15 @@ class RegMap extends Module {
   val reg_entryoffset    = RegEntryoffset()
   val reg_errcfg         = RegErrcfg()
   val reg_errinfo        = RegErrinfo()
+  // This is internal state associated with ERRINFO; it is deliberately not
+  // exposed in the architectural ERRINFO register layout.
+  val reg_errinfo_irq_suppressed = RegInit(false.B)
   val reg_erreqaddr      = RegErreqaddr()
   val reg_erreqaddrh     = RegErreqaddrh()
   val reg_erreqid        = RegErreqid()
 
   // addr offset
-  val addr_offset = io.regcfg.addr(15, 0) 
+  val addr_offset = io.regcfg.addr(15, 0)
 
   // addr hit
   // val addrhit_version        = addr_offset === IopmpParams.reg_version_addr_offset
@@ -806,7 +848,7 @@ class RegMap extends Module {
     reg_hwcfg0.enable := reg_hwcfg0.enable | w.enable  // W1SS
   }
 
-  // reg_hwcfg2        
+  // reg_hwcfg2
   when(io.regcfg.v && io.regcfg.rw && addrhit_hwcfg2) {
     val w = io.regcfg.din.asTypeOf(new RegHwcfg2)
     // val w = io.regcfg.din.asTypeOf(RegHwcfg2())
@@ -816,19 +858,19 @@ class RegMap extends Module {
     // unsupported rrid_transl_en and related features
     // when(reg_hwcfg0.rrid_transl_prog === 1.U) {
     //   reg_hwcfg2.rrid_transl := w.rrid_transl  // WARL
-    // } 
+    // }
   }
 
-  // reg_errcfg        
+  // reg_errcfg
   when(io.regcfg.v && io.regcfg.rw && addrhit_errcfg) {
     val w = io.regcfg.din.asTypeOf(new RegErrcfg)
     reg_errcfg.l := reg_errcfg.l | w.l  // W1SS
     when(reg_errcfg.l === 0.U) {
       reg_errcfg.ie := w.ie  // RW
       reg_errcfg.rs := w.rs  // WARL
-      reg_errcfg.msi_en := w.msi_en  // WARL
       reg_errcfg.stall_violation_en := w.stall_violation_en  // WARL
-      reg_errcfg.msidata := w.msidata  // WARL
+      // HWCFG2.msi_en is zero: ERR_CFG.msi_sel and msidata are WARL-to-zero.
+      // Ignore writes so software cannot select an unimplemented MSI path.
     }
   }
   // reg_errinfo  reqaddr & reqaddrh & reqid
@@ -836,6 +878,7 @@ class RegMap extends Module {
     reg_errinfo.v := 1.U
     reg_errinfo.ttype := io.bits.i_errinfo_ttype // transaction type of the first captured violation
     reg_errinfo.etype := io.bits.i_errinfo_etype // type of violation
+    reg_errinfo_irq_suppressed := io.bits.i_errinfo_irq_suppressed
     reg_erreqaddr.addr := io.bits.i_erreqaddr // Indicate the errored address[33:2]
     reg_erreqaddrh.addrh := io.bits.i_erreqaddrh // Indicate the errored address[65:34]
     reg_erreqid.rrid := io.bits.i_erreqid_rrid // Indicate the errored RRID
@@ -844,10 +887,9 @@ class RegMap extends Module {
     val w = io.regcfg.din.asTypeOf(new RegErrinfo)
     when(w.v === 1.U) {   // R/W1C
       reg_errinfo.v := 0.U
+      reg_errinfo_irq_suppressed := false.B
     }
-    // when(w.msi_werr === 1.U) {   // R/W1C
-    //   reg_errinfo.msi_werr := 0.U
-    // }
+    // msi_werr is unavailable and remains zero; writes have no effect.
   }
 
   // read registers
@@ -863,7 +905,10 @@ class RegMap extends Module {
     IopmpParams.reg_errinfo_addr_offset        -> reg_errinfo.toUInt,
     IopmpParams.reg_erreqaddr_addr_offset      -> reg_erreqaddr.toUInt,
     IopmpParams.reg_erreqaddrh_addr_offset     -> reg_erreqaddrh.toUInt,
-    IopmpParams.reg_erreqid_addr_offset        -> reg_erreqid.toUInt
+    IopmpParams.reg_erreqid_addr_offset        -> reg_erreqid.toUInt,
+    // MSI extension is not implemented; its optional address registers read zero.
+    IopmpParams.reg_errmsiaddr_addr_offset     -> 0.U(32.W),
+    IopmpParams.reg_errmsiaddrh_addr_offset    -> 0.U(32.W)
   ))
 
   io.regcfg.dout := regcfg_dout
@@ -875,10 +920,9 @@ class RegMap extends Module {
   io.bits.o_reg_hwcfg2_prio_entry  := reg_hwcfg2.prio_entry
   io.bits.o_reg_errcfg_ie          := reg_errcfg.ie
   io.bits.o_reg_errcfg_rs          := reg_errcfg.rs
-  io.bits.o_reg_errcfg_msi_en      := reg_errcfg.msi_en
-  io.bits.o_reg_errcfg_msidata     := reg_errcfg.msidata
   io.bits.o_reg_errinfo_v          := reg_errinfo.v
   io.bits.o_reg_errinfo_ttype      := reg_errinfo.ttype
+  io.bits.o_reg_errinfo_irq_suppressed := reg_errinfo_irq_suppressed
 }
 
 /*
@@ -901,10 +945,10 @@ object OptTreePriorityEncoder {
       val lower = in(half-1, 0)
       val upper = in(width-1, half)
       val lower_has = lower.orR
-      
+
       val lower_result = OptTreePriorityEncoder(lower)
       val upper_result = OptTreePriorityEncoder(upper)
-      
+
       // 使用位拼接替代加法，完全消除算术运算
       val upper_offset_bits = log2Ceil(width) - log2Ceil(half)
       Mux(lower_has,
@@ -915,7 +959,7 @@ object OptTreePriorityEncoder {
 }
 
 /*NAPOT address range decoder
-in : UInt(IopmpParams.soc_addr_width.W) // 66 bit addr，{entry_addrh, entry_addr, 2'b11}
+ in : UInt(IopmpParams.soc_addr_width.W) // 48-bit effective addr; source is {entry_addrh, entry_addr, 2'b11}
 etc: input address is：010_0011，mask = 011, output address range is: 010_0000 - 010_0111
 
 Explain0：
@@ -948,9 +992,12 @@ object NAPOTDecoder {
     val addr_start = Wire(UInt(IopmpParams.soc_addr_width.W))
     val addr_end = Wire(UInt(IopmpParams.soc_addr_width.W))
 
-    // find trailing ones
-    val trailing_ones = Wire(UInt(log2Ceil(IopmpParams.soc_addr_width).W))
-    trailing_ones := PriorityEncoder(~entry_addr)
+    // Find the first zero in the low-order bits.  PriorityEncoder(0) is
+    // defined as zero, so append a sentinel one above the address to make
+    // the all-ones NAPOT encoding saturate at the implemented width instead
+    // of being decoded as the smallest range.
+    val trailing_ones = Wire(UInt(log2Ceil(IopmpParams.soc_addr_width + 1).W))
+    trailing_ones := PriorityEncoder(Cat(1.U(1.W), ~entry_addr))
     DebugUtils.debug(trailing_ones,"trailing_ones_debug")
 
     // get mask
@@ -962,7 +1009,7 @@ object NAPOTDecoder {
     // address
     addr_start := entry_addr & (~mask).asUInt
     addr_end := addr_start + mask
-    
+
     (addr_start, addr_end)
   }
 }
@@ -973,12 +1020,12 @@ object EdgeDetect {
     val prev = RegNext(signal)
     !prev && signal
   }
-  
+
   def falling(signal: Bool): Bool = {
     val prev = RegNext(signal)
     prev && !signal
   }
-  
+
   def both(signal: Bool): Bool = {
     val prev = RegNext(signal)
     prev =/= signal
@@ -1026,6 +1073,7 @@ class Ctrl extends Module {
   io.reg.i_errinfo_v := 0.U
   io.reg.i_errinfo_ttype := 0.U
   io.reg.i_errinfo_etype := 0.U
+  io.reg.i_errinfo_irq_suppressed := false.B
   io.reg.i_erreqaddr := 0.U
   io.reg.i_erreqaddrh := 0.U
   io.reg.i_erreqid_rrid := 0.U
@@ -1064,7 +1112,17 @@ class Ctrl extends Module {
   val j_indx_d = RegInit(0.U(16.W))
   val entry_j_en_d = RegInit(false.B)
   val entry_attribute = RegInit(0.U.asTypeOf(new EntryAttribute))
-  
+
+  // Derive the per-entry interrupt suppression for the violation being
+  // processed. Errors without an associated entry must not inherit a stale
+  // entry attribute from an earlier request.
+  val error_has_entry = etype === 0x1.U || etype === 0x2.U ||
+    etype === 0x3.U || etype === 0x4.U
+  val current_irq_suppressed = MuxCase(false.B, Seq(
+    (error_has_entry && ttype === 0x1.U) -> entry_attribute.sire.asBool,
+    (error_has_entry && ttype === 0x2.U) -> entry_attribute.siwe.asBool
+  ))
+
   // matching
   val pri_hit = WireDefault(false.B) // hit
   val pri_part_hit = WireDefault(false.B) // partial hit
@@ -1090,7 +1148,7 @@ class Ctrl extends Module {
     }
     //1
     is(State.sSrcmd) {
-      when(io.stall === 0.U) { 
+      when(io.stall === 0.U) {
         state := State.sMdcfg
       }
     }
@@ -1146,6 +1204,7 @@ class Ctrl extends Module {
       io.reg.i_errinfo_v        := !io.reg.o_reg_errinfo_v // capture a illegal action, only log once
       io.reg.i_errinfo_ttype    := ttype // transaction type of the first captured violation
       io.reg.i_errinfo_etype    := etype // type of violation
+      io.reg.i_errinfo_irq_suppressed := current_irq_suppressed
       io.reg.i_erreqaddr        := req.pa(33, 2) // Indicate the errored address[33:2]
       io.reg.i_erreqaddrh       := Cat(0.U((IopmpParams.soc_addr_width - 30).W), req.pa(IopmpParams.soc_addr_width - 1, 34)) // Indicate the errored address[65:34], high bits are zero
       io.reg.i_erreqid_rrid     := req.rrid // Indicate the errored RRID
@@ -1163,8 +1222,8 @@ class Ctrl extends Module {
   }
 
   // reg the req info
-  when(io.req.fire && io.reg.o_reg_hwcfg0_enable.asBool) { 
-    req := io.req.bits 
+  when(io.req.fire && io.reg.o_reg_hwcfg0_enable.asBool) {
+    req := io.req.bits
     when (io.req.bits.rw) {
       ttype := 0x2.U // write access
     }.otherwise {
@@ -1205,7 +1264,7 @@ class Ctrl extends Module {
   mdcfg_m_en_d := io.mdcfg.m_en
   // get md_t and md_t_pre
   when(state === State.sMdcfgPre){
-    md_t := io.mdcfg.j_indx 
+    md_t := io.mdcfg.j_indx
     when(md_taskIdx_d === 0.U) { // if md_t is 1st md, then md_t_pre is 0
       md_t_pre := 0.U
     }
@@ -1233,10 +1292,14 @@ class Ctrl extends Module {
   // priority hit
   when(state === State.sPriority && entry_j_en_d) {
     val entry_addr = Wire(UInt(IopmpParams.soc_addr_width.W))
+    // The table stores the 66-bit PMP-style encoding, while this instance
+    // checks only a 48-bit physical address.  ENTRY_ADDRH writes reject the
+    // discarded bits above, so make the truncation explicit here.
+    val entry_addr_effective = io.entry.addr(IopmpParams.soc_addr_width - 3, 0)
     when(io.entry.attribute.a === 0x2.U) {
-      entry_addr := Cat(io.entry.addr, 1.U(2.W)) // NA4 mode
+      entry_addr := Cat(entry_addr_effective, 1.U(2.W)) // NA4 mode
     }.elsewhen(io.entry.attribute.a === 0x3.U) {
-      entry_addr := Cat(io.entry.addr, 3.U(2.W)) // NAPOT mode
+      entry_addr := Cat(entry_addr_effective, 3.U(2.W)) // NAPOT mode
     }.otherwise {
       entry_addr := 0.U //unsupported other modes
     }
@@ -1252,12 +1315,12 @@ class Ctrl extends Module {
         pri_part_hit := false.B
       }.otherwise { // Partial Match
         pri_hit := false.B
-        when(j_indx_d < io.reg.o_reg_hwcfg2_prio_entry) { 
+        when(j_indx_d < io.reg.o_reg_hwcfg2_prio_entry) {
           pri_part_hit := true.B
         }.otherwise {
           pri_part_hit := false.B
         }
-      }      
+      }
     }.otherwise {
       pri_hit := false.B // unsupported other modes
       pri_part_hit := false.B
@@ -1268,12 +1331,12 @@ class Ctrl extends Module {
   }
 
   //hitting entry match
-  when(pri_hit){
+  when(pri_hit || pri_part_hit){
     entry_attribute := io.entry.attribute
   }
   when(!io.reg.o_reg_hwcfg0_enable) {
     cf_w := 0.U
-    cf_r := 0.U    
+    cf_r := 0.U
   }.elsewhen(state === State.sMatching){ // get cf from entry[j]
     cf_w := !entry_attribute.w
     cf_r := !entry_attribute.r
@@ -1304,18 +1367,12 @@ class Ctrl extends Module {
     io.resp.valid := false.B
   }
 
-  // interrupt
-  when(io.reg.o_reg_errinfo_v.asBool && io.reg.o_reg_errcfg_ie.asBool) { // have a unclear error flag
-    when(io.reg.o_reg_errinfo_ttype === 1.U && !entry_attribute.sire) { //read error
-      io.int := true.B // assert int
-    }.elsewhen(io.reg.o_reg_errinfo_ttype === 2.U && !entry_attribute.siwe) { // write error
-      io.int := true.B // assert int
-    }.otherwise {
-      io.int := false.B // clear int
-    }
-  }.otherwise {
-    io.int := false.B // clear int
-  }
+  // Keep the global interrupt enable live, but use the suppression decision
+  // captured with the sticky ERRINFO record. Later requests may overwrite
+  // entry_attribute and must not change the pending interrupt.
+  io.int := io.reg.o_reg_errinfo_v.asBool &&
+    io.reg.o_reg_errcfg_ie.asBool &&
+    !io.reg.o_reg_errinfo_irq_suppressed
 
   // flush
   io.flush := EdgeDetect.falling(io.stall)
@@ -1328,7 +1385,7 @@ class Ctrl extends Module {
 
 }
 
-/* 
+/*
   main module for IOPMP checker
 */
 class IopmpChecker extends Module {
