@@ -1,5 +1,6 @@
 .PHONY: help init verilog clean bsp idea reformat checkformat
 
+CHISEL_VERSION ?=
 BUILD_DIR = ./build
 RTL_DIR = $(BUILD_DIR)/rtl
 
@@ -34,7 +35,7 @@ init: ## initialize git submodules
 $(TOP_V): $(SCALA_FILE)
 	@printf "Generate SystemVerilog ...\n"
 	mkdir -p $(BUILD_DIR)
-	$(TIME_CMD) mill -i $(TOP).runMain iopmp.IOPMP \
+	$(TIME_CMD) mill -i '$(TOP)[$(CHISEL_VERSION)].runMain' iopmp.IOPMP \
 		-td $(RTL_DIR)/
 	@printf "Generate SystemVerilog is ok\n"
 
